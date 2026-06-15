@@ -1,9 +1,0 @@
-{% extends "base.html" %}
-{% block content %}
-<h2>OCR Error</h2>
-<div class="error">
-  <p><strong>Status:</strong> {{ sheet.status }}</p>
-  <pre>{{ sheet.error_message }}</pre>
-</div>
-<p><a href="{% url 'ocr:upload' %}"><button>Upload Another Sheet</button></a></p>
-{% endblock %}
