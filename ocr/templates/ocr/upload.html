@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Upload Handwritten Sheet</h2>
+
+{% if messages %}
+  {% for message in messages %}
+    <div class="{% if message.tags == 'error' %}error{% else %}success{% endif %}">{{ message }}</div>
+  {% endfor %}
+{% endif %}
+
+<form action="{% url 'ocr:upload' %}" method="post" enctype="multipart/form-data">
+  {% csrf_token %}
+  <div class="row">
+    {{ form.image.label_tag }} {{ form.image }}
+  </div>
+  {% if form.errors %}
+    <div class="error">{{ form.errors }}</div>
+  {% endif %}
+  <div class="row">
+    <button type="submit">Start OCR</button>
+  </div>
+</form>
+{% endblock %}
