@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Handwritten Lottery Sheet OCR</h2>
+<p class="muted">Upload a mobile-captured fixed-format lottery sheet, review every extracted value, then confirm the final data.</p>
+<form action="{% url 'ocr:upload' %}" method="get">
+  <div class="row">
+    <button type="submit">Open Handwritten Sheet OCR</button>
+  </div>
+</form>
+{% endblock %}

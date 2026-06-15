@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>OCR Debug: Sheet {{ sheet.pk }}</h2>
+
+<style>
+  .debug-grid { display: grid; grid-template-columns: minmax(260px, 0.9fr) minmax(520px, 1.4fr); gap: 1rem; align-items: start; }
+  .debug-image img { width: 100%; height: auto; border: 1px solid #ddd; }
+  .debug-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.debug-table { min-width: 1120px; font-size: 0.85rem; }
+.cell-crop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0.75rem; }
+.cell-crop { border: 1px solid #ddd; padding: 0.5rem; border-radius: 6px; }
+.cell-crop img { width: 100%; height: auto; border: 1px solid #eee; }
+  .debug-table th { background: #fafafa; position: sticky; top: 0; }
+  .debug-table code { white-space: nowrap; }
+  .ignored { background: #fff6f6; }
+  .mapped { background: #f6fff6; }
+  @media (max-width: 900px) { .debug-grid { grid-template-columns: 1fr; } }
+</style>
+
+{% if cell_crop_debug %}
+<div class="success">
+  <p><strong>mode:</strong> {{ cell_crop_debug.mode }}</p>
+  <p><strong>constants:</strong> {{ cell_crop_debug.constants }}</p>
+</div>
+
+<div class="debug-grid">
+  <div class="debug-image">
+    {% if cell_crop_debug.grid_overlay_url %}
+      <img src="{{ cell_crop_debug.grid_overlay_url }}" alt="Cell crop grid overlay">
+    {% endif %}
+    {% if cell_crop_debug.normalized_table_url %}
+      <p><a href="{{ cell_crop_debug.normalized_table_url }}">Open normalized table image</a></p>
+    {% endif %}
+  </div>
+  <div class="debug-table-wrap">
+    <table class="debug-table">
+      <thead>
+        <tr>
+          <th>row</th>
+          <th>column</th>
+          <th>text</th>
+          <th>confidence</th>
+          <th>crop</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for cell in cell_crop_debug.cells %}
+          <tr>
+            <td>{{ cell.row_number }}</td>
+            <td>{{ cell.column_label }}</td>
+            <td>{{ cell.text }}</td>
+            <td>{{ cell.confidence|floatformat:3 }}</td>
+            <td>{% if cell.crop_url %}<a href="{{ cell.crop_url }}">crop</a>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<h3>Cell Crops</h3>
+<div class="cell-crop-grid">
+  {% for cell in cell_crop_debug.cells %}
+    <div class="cell-crop">
+      <strong>R{{ cell.row_number }} {{ cell.column_label }}</strong>
+      {% if cell.crop_url %}<img src="{{ cell.crop_url }}" alt="R{{ cell.row_number }} {{ cell.column_label }}">{% endif %}
+      <div>{{ cell.text }} ({{ cell.confidence|floatformat:2 }})</div>
+    </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="success">
+  <p><strong>DATA_TOP:</strong> {{ debug.constants.DATA_TOP }}</p>
+  <p><strong>DATA_BOTTOM:</strong> {{ debug.constants.DATA_BOTTOM }}</p>
+  <p><strong>COLUMN_BOUNDARIES:</strong> {{ debug.constants.COLUMN_BOUNDARIES }}</p>
+  <p><strong>COLUMN_LABELS:</strong> {{ debug.constants.COLUMN_LABELS }}</p>
+  <p><strong>Detected row anchor count:</strong> {{ debug.row_anchor_count }}</p>
+  <p><strong>Detected row anchor y positions:</strong> {{ debug.row_anchor_positions }}</p>
+  <p><strong>row_detection_method:</strong> {{ debug.row_detection_method }}</p>
+  <p><strong>detected cluster count:</strong> {{ debug.detected_cluster_count }}</p>
+  <p><strong>first_row_center:</strong> {{ debug.first_row_center }}</p>
+  <p><strong>last_row_center:</strong> {{ debug.last_row_center }}</p>
+  <p><strong>row_coverage_ratio:</strong> {{ debug.row_coverage_ratio }}</p>
+  <p><strong>final 25 row centers:</strong> {{ debug.row_centers }}</p>
+  <p><strong>row band boundaries:</strong> {{ debug.row_boundaries }}</p>
+  <p><strong>fallback_used:</strong> {{ debug.fallback_used }}</p>
+</div>
+
+{% if debug.joined_cells %}
+  <div class="error">
+    <strong>Multi-word cells</strong>
+    <ul>
+      {% for cell in debug.joined_cells %}
+        <li>
+          row {{ cell.row_number }}, group {{ cell.group_number }}, {{ cell.field_type }}
+          ({{ cell.assigned_column }}):
+          {{ cell.joined_words }} at {{ cell.word_centers }}
+          x-distance {{ cell.x_distance|floatformat:4 }}
+          {% if cell.suspicious %}<strong>suspicious</strong>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
+<div class="debug-grid">
+  <div class="debug-image">
+    {% if overlay_url %}
+      <img src="{{ overlay_url }}" alt="OCR debug overlay">
+    {% else %}
+      <img src="{{ sheet.image.url }}" alt="Uploaded sheet">
+      <p class="muted">Overlay image could not be generated.</p>
+    {% endif %}
+  </div>
+
+  <div class="debug-table-wrap">
+    <table class="debug-table">
+      <thead>
+        <tr>
+          <th>text</th>
+          <th>confidence</th>
+          <th>x_center</th>
+          <th>y_center</th>
+          <th>ignored_reason</th>
+          <th>row_anchor</th>
+          <th>assigned_row</th>
+          <th>assigned_column</th>
+          <th>boundary_risk</th>
+          <th>final_cell_key</th>
+          <th>polygon</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for word in debug.word_rows %}
+          <tr class="{% if word.ignored_reason %}ignored{% else %}mapped{% endif %}">
+            <td>{{ word.text }}</td>
+            <td>{{ word.confidence|floatformat:3 }}</td>
+            <td>{{ word.x_center|floatformat:4 }}</td>
+            <td>{{ word.y_center|floatformat:4 }}</td>
+            <td>{{ word.ignored_reason }}</td>
+            <td>{{ word.row_anchor|default:"" }}</td>
+            <td>{{ word.assigned_row|default:"" }}</td>
+            <td>{{ word.assigned_column }}</td>
+            <td>{{ word.boundary_risk }}</td>
+            <td><code>{{ word.final_cell_key }}</code></td>
+            <td>{{ word.normalized_polygon }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
