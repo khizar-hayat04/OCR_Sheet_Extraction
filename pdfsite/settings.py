@@ -40,7 +40,9 @@ SECRET_KEY = 'django-insecure-ko(2*7_ib!2wq8yyxx+0m@02t_qnmns&a72^s)ac*gzks1x9_^
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    "ocr-sheet-extraction.onrender.com",
+]
 
 
 # Application definition
