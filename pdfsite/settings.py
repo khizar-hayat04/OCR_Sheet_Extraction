@@ -42,7 +42,7 @@ DEBUG = True
 
 ALLOWED_HOSTS = [
     "ocr-sheet-extraction.onrender.com",
-    
+    "127.0.0.1"
 ]
 
 
