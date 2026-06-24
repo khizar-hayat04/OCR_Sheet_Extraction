@@ -3,6 +3,7 @@ import re
 _ZERO_MARKER_COLLAPSED = frozenset({"2x", "x2", "*"})
 _CROSS_SINGLE = re.compile(r"^[x×✕✗*]$", re.IGNORECASE)
 _EXPLICIT_DITTO_MARKS = frozenset({'"', "''", "do", "ditto", "-do-", ",,"})
+_DIGIT_SLASH_DIGIT = re.compile(r"(?<=\d)[/\\|\u2044\u2215](?=\d)")
 
 
 _AZURE_CHECKBOX_PATTERN = re.compile(
@@ -59,6 +60,18 @@ def _clean_fs_raw(value):
 
 def prepare_fs_cell_value(value):
     return _clean_fs_raw(value)
+
+
+def normalize_n_ocr_text(value):
+    if value is None:
+        return ""
+    raw = str(value)
+    raw = re.sub(r":selected:|:unselected:", "", raw, flags=re.IGNORECASE)
+    raw = raw.replace("\u00d7", "X").replace("Ã—", "X")
+    raw = raw.replace("\u00b0", "")
+    raw = re.sub(r"\s+", " ", raw).strip()
+    raw = _DIGIT_SLASH_DIGIT.sub("1", raw)
+    return raw
 
 
 def _canonicalize_fs_text(value):

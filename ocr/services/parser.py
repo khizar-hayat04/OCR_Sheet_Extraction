@@ -4,7 +4,7 @@ import re
 from django.conf import settings
 
 from .base import OCRCell, OCRProviderError
-from .validators import normalize_fs_ocr_text, prepare_fs_cell_value, resolve_fs_columns
+from .validators import normalize_fs_ocr_text, normalize_n_ocr_text, prepare_fs_cell_value, resolve_fs_columns
 
 logger = logging.getLogger(__name__)
 
@@ -409,17 +409,7 @@ def _clean_content(raw: str) -> str:
     Azure sometimes emits  'X\n:selected:'  for a ticked checkbox cell —
     the newline must be removed before the X-variant regex can match.
     """
-    if raw is None:
-        return ""
-    # Remove Azure checkbox annotations
-    raw = re.sub(r':selected:|:unselected:', '', raw)
-    # Normalize multiplication sign variants to ASCII X
-    raw = raw.replace('\u00d7', 'X').replace('×', 'X')
-    # Strip degree symbol when present
-    raw = raw.replace('\u00b0', '')
-    # Collapse whitespace/newlines
-    raw = re.sub(r'\s+', ' ', raw).strip()
-    return raw
+    return normalize_n_ocr_text(raw)
 
 
 def _normalize_value(value: str) -> str:

@@ -5,7 +5,7 @@ import re
 from django.conf import settings
 
 from .base import MissingCredentialsError, OCRCell, OCRProvider, OCRProviderError
-from .validators import normalize_fs_ocr_text, prepare_fs_cell_value, resolve_fs_columns
+from .validators import normalize_fs_ocr_text, normalize_n_ocr_text, prepare_fs_cell_value, resolve_fs_columns
 from ocr.utils.image_preprocessing import COLUMN_LABELS, crop_grid_cells, grid_cell_boxes, normalize_table_image
 
 
@@ -158,12 +158,13 @@ class AzureCellCropProvider(OCRProvider):
         for row_number in range(1, 26):
             for column_index, (group_number, field_type) in FIELD_MAP.items():
                 result = by_cell.get((row_number, column_index), {})
+                value = _sanitize_text(result.get("text", ""), field_type)
                 output.append(
                     OCRCell(
                         row_number=row_number,
                         group_number=group_number,
                         field_type=field_type,
-                        value=result.get("text", ""),
+                        value=value,
                         confidence=float(result.get("confidence") or 0),
                         bounding_box=result.get("box"),
                     )
@@ -271,7 +272,7 @@ def _map_words_to_grid_cells(words, crops):
 def _sanitize_text(text, field_type):
     text = (text or "").strip()
     if field_type == "N":
-        return "".join(re.findall(r"\d+", text))
+        return "".join(re.findall(r"\d+", normalize_n_ocr_text(text)))
     if field_type in {"F", "S"}:
         return prepare_fs_cell_value(text)
     return text

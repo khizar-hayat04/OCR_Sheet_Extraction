@@ -1,5 +1,7 @@
+import json
 import tempfile
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -13,7 +15,7 @@ from .services.base import OCRCell, OCRProviderError
 from .services.azure_cell_crop import AzureCellCropProvider
 from .services.parser import parse_azure_result
 from .services.debug_builder import build_azure_debug_data
-from .services.validators import is_zero_marker, normalize_fs_ocr_text, normalize_fs_value, resolve_fs_columns
+from .services.validators import is_zero_marker, normalize_fs_ocr_text, normalize_fs_value, normalize_n_ocr_text, resolve_fs_columns
 from .services.workflow import process_sheet
 from .utils.image_preprocessing import crop_grid_cells
 
@@ -128,7 +130,7 @@ class CellCropProvider:
                         "row_number": row,
                         "column_index": col,
                         "column_label": ["S.N", "N.1", "F1", "S1", "N.2", "F2", "S2", "N.3", "F3", "S3"][col],
-                        "text": "" if row == 2 and col == 1 else f"{row}{col}",
+                        "text": "9/90" if row == 14 and col == 4 else ("" if row == 2 and col == 1 else f"{row}{col}"),
                         "confidence": 0 if row == 2 and col == 1 else 0.95,
                         "box": {"left": col, "top": row},
                         "crop_url": "",
@@ -202,6 +204,16 @@ class FSValueValidationTests(TestCase):
     def test_non_numeric_non_marker_values_normalize_to_zero(self):
         self.assertEqual(normalize_fs_value("x"), "0")
         self.assertEqual(normalize_fs_value("abc"), "0")
+
+
+class NValueValidationTests(TestCase):
+    def test_slash_between_digits_normalizes_to_one(self):
+        self.assertEqual(normalize_n_ocr_text("9/90"), "9190")
+        self.assertEqual(normalize_n_ocr_text("2/62"), "2162")
+
+    def test_non_numeric_slashes_are_preserved(self):
+        self.assertEqual(normalize_n_ocr_text("/90"), "/90")
+        self.assertEqual(normalize_n_ocr_text("9/"), "9/")
 
 
 class FSColumnPostProcessingTests(TestCase):
@@ -475,6 +487,8 @@ class OCRWorkflowTests(TestCase):
         empty = next(cell for cell in cells if cell.row_number == 2 and cell.group_number == 1 and cell.field_type == "N")
         self.assertEqual(empty.value, "")
         self.assertEqual(empty.confidence, 0)
+        n2 = next(cell for cell in cells if cell.row_number == 14 and cell.group_number == 2 and cell.field_type == "N")
+        self.assertEqual(n2.value, "9190")
 
     def test_cell_crop_workflow_creates_225_cells_and_ignores_sn(self):
         SheetQuota.objects.create(user=self.user, remaining_sheets=1)
@@ -546,6 +560,17 @@ class OCRWorkflowTests(TestCase):
         target = next(cell for cell in cells if cell.row_number == 2 and cell.group_number == 1 and cell.field_type == "F")
         self.assertEqual(target.value, "1000")
         self.assertIsNotNone(target.bounding_box)
+
+    def test_azure_parser_repairs_digit_slash_digit_in_n_cells(self):
+        cells = parse_azure_result(fake_azure_response(azure_serial_anchors() + [azure_word("9/90", 14, 4)]))
+        target = next(cell for cell in cells if cell.row_number == 14 and cell.group_number == 2 and cell.field_type == "N")
+        self.assertEqual(target.value, "9190")
+
+    def test_raw_dump_repairs_row_14_n2_value(self):
+        raw_response = json.loads((Path(__file__).resolve().parent.parent / "azure_raw_dump.json").read_text())
+        cells = parse_azure_result(raw_response)
+        target = next(cell for cell in cells if cell.row_number == 14 and cell.group_number == 2 and cell.field_type == "N")
+        self.assertEqual(target.value, "9190")
 
     def test_azure_word_parser_ignores_printed_sn_column(self):
         cells = parse_azure_result(fake_azure_response([azure_word("1", 1, 0), azure_word("193", 1, 1)]))
