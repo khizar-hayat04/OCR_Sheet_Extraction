@@ -1,9 +1,13 @@
 import re
 
+from django.conf import settings
+
 _ZERO_MARKER_COLLAPSED = frozenset({"2x", "x2", "*"})
 _CROSS_SINGLE = re.compile(r"^[x×✕✗*]$", re.IGNORECASE)
 _EXPLICIT_DITTO_MARKS = frozenset({'"', "''", "do", "ditto", "-do-", ",,"})
 _DIGIT_SLASH_DIGIT = re.compile(r"(?<=\d)[/\\|\u2044\u2215](?=\d)")
+_VALIDATION_CONFIDENCE_THRESHOLD = 0.85
+_MAX_NUMERIC_VALUE = 1000
 
 
 _AZURE_CHECKBOX_PATTERN = re.compile(
@@ -131,6 +135,41 @@ def normalize_fs_value(value):
     if numeric is not None:
         return numeric
     return "0"
+
+
+def validation_confidence_threshold():
+    return float(getattr(settings, "OCR_VALIDATION_CONFIDENCE_THRESHOLD", _VALIDATION_CONFIDENCE_THRESHOLD))
+
+
+def validate_cell(val, confidence, field_type=None):
+    value = (val or "").strip()
+    reasons = []
+    try:
+        score = float(confidence or 0)
+    except (TypeError, ValueError):
+        score = 0.0
+
+    threshold = validation_confidence_threshold()
+    if score < threshold:
+        reasons.append(f"Low confidence score ({score:.2f})")
+
+    compact = re.sub(r"\s+", "", value)
+    if field_type == "N":
+        if compact and not re.fullmatch(r"\d{2,4}", compact):
+            reasons.append("N field must contain 2 to 4 digits")
+    elif field_type in ("F", "S"):
+        if compact and not compact.isdigit():
+            reasons.append(f"{field_type} field must contain only numbers")
+
+    if compact.isdigit() and int(compact) > _MAX_NUMERIC_VALUE:
+        reasons.append(f"Value is an unusually high outlier ({compact})")
+
+    return {
+        "value": value,
+        "is_uncertain": bool(reasons),
+        "reason": "; ".join(reasons),
+        "confidence": score,
+    }
 
 
 def resolve_fs_columns(cells):
