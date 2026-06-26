@@ -5,7 +5,7 @@ import re
 from django.conf import settings
 
 from .base import MissingCredentialsError, OCRCell, OCRProvider, OCRProviderError
-from .validators import normalize_fs_ocr_text, normalize_n_ocr_text, prepare_fs_cell_value, resolve_fs_columns
+from .validators import is_suspicious_data_value, normalize_fs_ocr_text, normalize_n_ocr_text, prepare_fs_cell_value, resolve_fs_columns
 from ocr.utils.image_preprocessing import COLUMN_LABELS, crop_grid_cells, grid_cell_boxes, normalize_table_image
 
 
@@ -158,6 +158,7 @@ class AzureCellCropProvider(OCRProvider):
         for row_number in range(1, 26):
             for column_index, (group_number, field_type) in FIELD_MAP.items():
                 result = by_cell.get((row_number, column_index), {})
+                raw_text = result.get("raw_text", result.get("text", ""))
                 value = _sanitize_text(result.get("text", ""), field_type)
                 output.append(
                     OCRCell(
@@ -167,6 +168,7 @@ class AzureCellCropProvider(OCRProvider):
                         value=value,
                         confidence=float(result.get("confidence") or 0),
                         bounding_box=result.get("box"),
+                        is_flagged=is_suspicious_data_value(raw_text, value, field_type),
                     )
                 )
         return resolve_fs_columns(output)
@@ -247,6 +249,7 @@ def _map_words_to_grid_cells(words, crops):
             cell = by_cell[(row_number, col_index)]
             words_in_cell = sorted(cell["words"], key=lambda word: (word["y_center"], word["x_center"]))
             text = " ".join(word["content"] for word in words_in_cell).strip()
+            raw_text = text
             confidence = min((word["confidence"] for word in words_in_cell), default=0.0)
             if col_index in FIELD_MAP:
                 group_number, field_type = FIELD_MAP[col_index]
@@ -261,6 +264,7 @@ def _map_words_to_grid_cells(words, crops):
                     "column_label": cell["column_label"],
                     "box": cell["box"],
                     "crop_url": cell.get("crop_url", ""),
+                    "raw_text": raw_text,
                     "text": text,
                     "confidence": confidence,
                     "words": words_in_cell,

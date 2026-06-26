@@ -42,5 +42,6 @@ class ConfirmSheetForm(forms.Form):
     def save(self):
         for cell in self.cells:
             cell.corrected_value = self.cleaned_data[self.field_name(cell)]
+            cell.is_flagged = False
             cell.is_confirmed = True
-            cell.save(update_fields=["corrected_value", "is_confirmed"])
+            cell.save(update_fields=["corrected_value", "is_flagged", "is_confirmed"])

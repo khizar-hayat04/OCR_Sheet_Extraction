@@ -1,3 +1,5 @@
+import json
+
 from django.conf import settings
 from django.db import transaction
 
@@ -5,7 +7,7 @@ from .azure_document_intelligence import AzureDocumentIntelligenceProvider
 from .azure_cell_crop import AzureCellCropProvider
 from .base import OCRCell, OCRProviderError
 from .mock import MockOCRProvider
-from .validators import resolve_fs_columns
+from .validators import is_suspicious_data_value, resolve_fs_columns
 
 
 def get_provider():
@@ -42,6 +44,12 @@ def process_sheet(sheet, provider=None):
     try:
         raw_response = provider.analyze(sheet.image.path)
         parsed_cells = provider.parse_cells(raw_response)
+        flagged_cells = {
+            (cell.row_number, cell.group_number, cell.field_type): (
+                cell.is_flagged or is_suspicious_data_value(cell.value, cell.value, cell.field_type)
+            )
+            for cell in parsed_cells
+        }
         parsed_cells = resolve_fs_columns(parsed_cells)
         if not parsed_cells:
             raise OCRProviderError("OCR returned no editable cells.")
@@ -68,6 +76,7 @@ def process_sheet(sheet, provider=None):
                     confidence=cell.confidence,
                     corrected_value="",
                     is_low_confidence=cell.confidence < threshold,
+                    is_flagged=flagged_cells.get((cell.row_number, cell.group_number, cell.field_type), False),
                     bounding_box=cell.bounding_box,
                 )
                 for cell in parsed_cells
@@ -102,6 +111,7 @@ def confirmed_payload(sheet):
             field_type=cell.field_type,
             value=cell.review_value,
             confidence=cell.confidence,
+            is_flagged=cell.is_flagged,
         )
         for cell in sheet.cells.all()
     ]
@@ -133,6 +143,13 @@ def confirmed_payload(sheet):
             )
         rows.append(row_payload)
     return {"rows": rows, "totals": totals}
+
+
+def sync_extracted_data_json(sheet):
+    if sheet.final_data is None:
+        return
+    output_path = settings.BASE_DIR / "extracted_data.json"
+    output_path.write_text(json.dumps(sheet.final_data, indent=2), encoding="utf-8")
 
 
 def _add_numeric_total(total_map, group_number, value):

@@ -8,6 +8,7 @@ _EXPLICIT_DITTO_MARKS = frozenset({'"', "''", "do", "ditto", "-do-", ",,"})
 _DIGIT_SLASH_DIGIT = re.compile(r"(?<=\d)[/\\|\u2044\u2215](?=\d)")
 _VALIDATION_CONFIDENCE_THRESHOLD = 0.85
 _MAX_NUMERIC_VALUE = 1000
+_OCR_SUSPICIOUS_ASCII_CHARS = frozenset("|/-~")
 
 
 _AZURE_CHECKBOX_PATTERN = re.compile(
@@ -139,6 +140,34 @@ def normalize_fs_value(value):
 
 def validation_confidence_threshold():
     return float(getattr(settings, "OCR_VALIDATION_CONFIDENCE_THRESHOLD", _VALIDATION_CONFIDENCE_THRESHOLD))
+
+
+def has_ocr_suspicious_marker(content):
+    value = "" if content is None else str(content)
+    return any(ord(char) > 127 or char in _OCR_SUSPICIOUS_ASCII_CHARS for char in value)
+
+
+def is_suspicious_data_value(raw_content, normalized_value=None, field_type=None):
+    if not has_ocr_suspicious_marker(raw_content):
+        return False
+
+    raw = "" if raw_content is None else str(raw_content)
+    if field_type in ("F", "S") and is_cross_marker(raw):
+        return False
+
+    value = raw if normalized_value is None else str(normalized_value)
+    compact = re.sub(r"\s+", "", value)
+    if not compact.isdigit():
+        if field_type in ("F", "S"):
+            numeric = parse_fs_numeric(raw)
+            compact = numeric or compact
+        elif field_type == "N":
+            compact = re.sub(r"\s+", "", normalize_n_ocr_text(raw))
+    return bool(compact and compact.isdigit())
+
+
+def is_ui_noise(content):
+    return is_suspicious_data_value(content)
 
 
 def validate_cell(val, confidence, field_type=None):

@@ -10,6 +10,7 @@ class OCRCell:
     value: str
     confidence: float
     bounding_box: Optional[Dict[str, Any]] = None
+    is_flagged: bool = False
 
 
 class OCRProviderError(Exception):

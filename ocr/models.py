@@ -64,6 +64,7 @@ class ExtractedCell(models.Model):
     confidence = models.FloatField(default=0)
     corrected_value = models.CharField(max_length=32, blank=True, default="")
     is_low_confidence = models.BooleanField(default=False)
+    is_flagged = models.BooleanField(default=False)
     is_confirmed = models.BooleanField(default=False)
     bounding_box = models.JSONField(null=True, blank=True)
 

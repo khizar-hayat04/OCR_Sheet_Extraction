@@ -4,7 +4,7 @@ import re
 from django.conf import settings
 
 from .base import OCRCell, OCRProviderError
-from .validators import normalize_fs_ocr_text, normalize_n_ocr_text, prepare_fs_cell_value, resolve_fs_columns
+from .validators import is_suspicious_data_value, normalize_fs_ocr_text, normalize_n_ocr_text, prepare_fs_cell_value, resolve_fs_columns
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +153,7 @@ def _parse_table_cells(table, raw_response):
         # ---- Step 4: assign every non-SN cell to closest anchor -----------
         # Use a left-to-right stable mapping per row to avoid single-cell
         # x-center drift causing misassignment (e.g. last-row N mapped to F).
-        accumulated: dict[tuple, str] = {}
+        accumulated: dict[tuple, dict] = {}
 
         data_cells = [c for c in row_cells if c is not sn_cell]
         data_cells.sort(key=_cell_cx)
@@ -192,7 +192,12 @@ def _parse_table_cells(table, raw_response):
                     best_cell = cell
             if best_cell is not None and best_dist is not None and best_dist <= HEADER_ANCHOR_TOLERANCE:
                 key = (gnum, ftype)
-                accumulated[key] = _cell_value_for_field(id(best_cell), ftype)
+                raw = cell_raw.get(id(best_cell), "")
+                value = _cell_value_for_field(id(best_cell), ftype)
+                accumulated[key] = {
+                    "value": value,
+                    "is_flagged": is_suspicious_data_value(raw, value, ftype),
+                }
                 assigned_cells.add(id(best_cell))
                 assigned_anchors.add(idx)
 
@@ -223,14 +228,19 @@ def _parse_table_cells(table, raw_response):
             key = (gnum, ftype)
             value = _cell_value_for_field(id(cell), ftype)
             existing = accumulated.get(key)
-            if existing is None or len(value) > len(existing):
-                accumulated[key] = value
+            if existing is None or len(value) > len(existing["value"]):
+                raw = cell_raw.get(id(cell), "")
+                accumulated[key] = {
+                    "value": value,
+                    "is_flagged": is_suspicious_data_value(raw, value, ftype),
+                }
             remaining_anchors.remove(chosen_idx)
 
         # ---- Step 5: emit one OCRCell per logical column ------------------
         for cx, group_number, field_type in anchor_x_list:
             key = (group_number, field_type)
-            value = accumulated.get(key, "")
+            mapped = accumulated.get(key, {"value": "", "is_flagged": False})
+            value = mapped["value"]
             # find candidate raw cells that mapped to this logical slot
             candidates = [
                 c for c in row_cells if c is not sn_cell and
@@ -250,6 +260,7 @@ def _parse_table_cells(table, raw_response):
                 value=value,
                 confidence=confidence,
                 bounding_box=bounding_box,
+                is_flagged=mapped["is_flagged"],
             ))
 
     logger.info(
@@ -275,6 +286,7 @@ def _parse_table_cells(table, raw_response):
                         value="",
                         confidence=0.0,
                         bounding_box=None,
+                        is_flagged=False,
                     ))
 
     logger.info("Table-cell parser finalized to %d OCRCell objects", len(final_cells))
@@ -527,6 +539,7 @@ def _parse_with_word_fallback(raw_response):
                 value = prepare_fs_cell_value(joined)
             else:
                 value = _normalize_value(_clean_content(joined))
+            is_flagged = is_suspicious_data_value(joined, value, field_type)
             confidence = min((w["confidence"] for w in cell_words), default=1.0)
             cells.append(OCRCell(
                 row_number=row_number,
@@ -535,6 +548,7 @@ def _parse_with_word_fallback(raw_response):
                 value=value,
                 confidence=confidence,
                 bounding_box=None,
+                is_flagged=is_flagged,
             ))
 
     logger.info("Word fallback produced %d OCRCell objects", len(cells))

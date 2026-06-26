@@ -15,7 +15,7 @@ from .services.base import OCRCell, OCRProviderError
 from .services.azure_cell_crop import AzureCellCropProvider
 from .services.parser import parse_azure_result
 from .services.debug_builder import build_azure_debug_data
-from .services.validators import is_zero_marker, normalize_fs_ocr_text, normalize_fs_value, normalize_n_ocr_text, resolve_fs_columns
+from .services.validators import is_suspicious_data_value, is_zero_marker, normalize_fs_ocr_text, normalize_fs_value, normalize_n_ocr_text, resolve_fs_columns
 from .services.workflow import process_sheet
 from .utils.image_preprocessing import crop_grid_cells
 
@@ -52,6 +52,35 @@ class FakeProvider:
 class FailingProvider(FakeProvider):
     def analyze(self, file_path):
         raise OCRProviderError("boom")
+
+
+class NoiseProvider(FakeProvider):
+    def parse_cells(self, raw_response):
+        cells = fake_cells()
+        for cell in cells:
+            if cell.row_number == 1 and cell.group_number == 1 and cell.field_type == "F":
+                cell.value = "28\u00b0"
+            if cell.row_number == 1 and cell.group_number == 1 and cell.field_type == "S":
+                cell.value = "50 :selected:"
+            if cell.row_number == 1 and cell.group_number == 2 and cell.field_type == "N":
+                cell.value = "ABC"
+        return cells
+
+
+class TableNoiseProvider(FakeProvider):
+    def analyze(self, file_path):
+        return fake_azure_table_response(row_number=18, column_index=2, content="28\u00b0")
+
+    def parse_cells(self, raw_response):
+        return parse_azure_result(raw_response)
+
+
+class TableStructuralNoiseProvider(FakeProvider):
+    def analyze(self, file_path):
+        return fake_azure_table_response(row_number=18, column_index=2, content="\u00d7 :selected:")
+
+    def parse_cells(self, raw_response):
+        return parse_azure_result(raw_response)
 
 
 def azure_word(content, row, col, confidence=0.95):
@@ -103,6 +132,28 @@ def azure_serial_anchors():
 
 def fake_azure_response(words):
     return {"pages": [{"width": 1, "height": 1, "words": words}]}
+
+
+def azure_table_cell(row, col, content, confidence=0.95):
+    left = col * 100
+    top = row * 40
+    right = left + 80
+    bottom = top + 30
+    return {
+        "rowIndex": row,
+        "columnIndex": col,
+        "content": content,
+        "confidence": confidence,
+        "boundingRegions": [{"polygon": [left, top, right, top, right, bottom, left, bottom]}],
+    }
+
+
+def fake_azure_table_response(row_number, column_index, content):
+    labels = ["S.N", "N.1", "F", "S", "N.2", "F", "S", "N.3", "F", "S"]
+    cells = [azure_table_cell(0, index, label) for index, label in enumerate(labels)]
+    cells.append(azure_table_cell(row_number, 0, str(row_number)))
+    cells.append(azure_table_cell(row_number, column_index, content))
+    return {"analyzeResult": {"tables": [{"cells": cells}]}}
 
 
 class AzureWordsProvider:
@@ -165,6 +216,20 @@ class SingleCallCellCropProvider(AzureCellCropProvider):
 
 
 class FSValueValidationTests(TestCase):
+    def test_suspicious_detector_only_flags_explicit_numeric_data_values(self):
+        self.assertTrue(is_suspicious_data_value("28\u00b0", "28", "F"))
+        self.assertTrue(is_suspicious_data_value("9/90", "9190", "N"))
+        for raw, value, field_type in (
+            ("\u00d7 :selected:", "0", "F"),
+            (":selected:", "0", "F"),
+            ("ABC", "ABC", "N"),
+            ("x", "0", "S"),
+            ("25", "25", "F"),
+            ("", "", "F"),
+            (None, "", "F"),
+        ):
+            self.assertFalse(is_suspicious_data_value(raw, value, field_type))
+
     def test_numeric_values_are_preserved(self):
         for value in ("25", "17", "0", "100", "738"):
             self.assertEqual(normalize_fs_value(value), value)
@@ -385,6 +450,34 @@ class OCRWorkflowTests(TestCase):
         process_sheet(sheet, provider=FakeProvider())
         self.assertTrue(ExtractedCell.objects.get(sheet=sheet, row_number=1, group_number=1, field_type="F").is_low_confidence)
 
+    def test_ui_noise_cells_are_marked_for_review(self):
+        SheetQuota.objects.create(user=self.user, remaining_sheets=1)
+        sheet = SheetUpload.objects.create(user=self.user, image=fake_image())
+        process_sheet(sheet, provider=NoiseProvider())
+        self.assertTrue(ExtractedCell.objects.get(sheet=sheet, row_number=1, group_number=1, field_type="F").is_flagged)
+        self.assertFalse(ExtractedCell.objects.get(sheet=sheet, row_number=1, group_number=1, field_type="S").is_flagged)
+        self.assertFalse(ExtractedCell.objects.get(sheet=sheet, row_number=1, group_number=2, field_type="N").is_flagged)
+
+    def test_table_cell_noise_survives_normalization_as_flag(self):
+        SheetQuota.objects.create(user=self.user, remaining_sheets=1)
+        sheet = SheetUpload.objects.create(user=self.user, image=fake_image())
+        process_sheet(sheet, provider=TableNoiseProvider())
+        target = ExtractedCell.objects.get(sheet=sheet, row_number=18, group_number=1, field_type="F")
+        self.assertEqual(target.extracted_value, "28")
+        self.assertTrue(target.is_flagged)
+        response = self.client.get(reverse("ocr:review", args=[sheet.pk]))
+        self.assertContains(response, "cell-suspicious")
+
+    def test_structural_suspicious_marker_does_not_get_red_border(self):
+        SheetQuota.objects.create(user=self.user, remaining_sheets=1)
+        sheet = SheetUpload.objects.create(user=self.user, image=fake_image())
+        process_sheet(sheet, provider=TableStructuralNoiseProvider())
+        target = ExtractedCell.objects.get(sheet=sheet, row_number=18, group_number=1, field_type="F")
+        self.assertEqual(target.extracted_value, "0")
+        self.assertFalse(target.is_flagged)
+        response = self.client.get(reverse("ocr:review", args=[sheet.pk]))
+        self.assertContains(response, 'data-is-flagged="true"', count=0)
+
     def test_user_can_edit_extracted_values_and_confirm(self):
         SheetQuota.objects.create(user=self.user, remaining_sheets=1)
         sheet = SheetUpload.objects.create(user=self.user, image=fake_image())
@@ -399,6 +492,47 @@ class OCRWorkflowTests(TestCase):
         self.assertEqual(target.corrected_value, "193")
         self.assertEqual(sheet.status, SheetUpload.STATUS_CONFIRMED)
         self.assertEqual(sheet.final_data["rows"][0]["groups"][0]["N"], "193")
+
+    def test_user_can_correct_flagged_cell_with_json_endpoint(self):
+        SheetQuota.objects.create(user=self.user, remaining_sheets=1)
+        sheet = SheetUpload.objects.create(user=self.user, image=fake_image())
+        process_sheet(sheet, provider=NoiseProvider())
+        target = sheet.cells.get(row_number=1, group_number=1, field_type="F")
+        self.assertTrue(target.is_flagged)
+
+        response = self.client.post(
+            reverse("ocr:correct_cell", args=[sheet.pk, target.pk]),
+            data=json.dumps({"value": "77"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        target.refresh_from_db()
+        sheet.refresh_from_db()
+        self.assertEqual(target.corrected_value, "77")
+        self.assertFalse(target.is_flagged)
+        self.assertEqual(sheet.final_data["rows"][0]["groups"][0]["F"], "77")
+
+    def test_f_s_correction_recalculates_ditto_chain(self):
+        SheetQuota.objects.create(user=self.user, remaining_sheets=1)
+        sheet = SheetUpload.objects.create(user=self.user, image=fake_image())
+        process_sheet(sheet, provider=FakeProvider())
+        target = sheet.cells.get(row_number=1, group_number=1, field_type="F")
+        next_cell = sheet.cells.get(row_number=2, group_number=1, field_type="F")
+
+        response = self.client.post(
+            reverse("ocr:correct_cell", args=[sheet.pk, target.pk]),
+            data=json.dumps({"value": "200"}),
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        next_cell.refresh_from_db()
+        sheet.refresh_from_db()
+        self.assertEqual(next_cell.review_value, "200")
+        self.assertEqual(sheet.final_data["rows"][1]["groups"][0]["F"], "200")
 
     def test_invalid_correction_shows_friendly_error(self):
         SheetQuota.objects.create(user=self.user, remaining_sheets=1)

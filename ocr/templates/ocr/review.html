@@ -26,6 +26,14 @@
   .review-table th:first-child, .review-table td:first-child { width: 3.5rem; text-align: center; }
   .review-table input { width: 100%; min-width: 4.5rem; box-sizing: border-box; padding: 0.35rem; }
   .review-table .low-confidence input { background: #fff3cd; border: 1px solid #d49b00; }
+  .review-table .cell-suspicious {
+    border: 2px solid #d90429;
+    border-radius: 8px;
+    outline: 3px solid rgba(217, 4, 41, 0.28);
+    background: #fff5f5;
+  }
+  .review-table .cell-suspicious input { border: 1px solid #d90429; background: #fffafa; }
+  .review-table .cell-saving input { opacity: 0.65; }
   .confidence { display: block; color: #666; font-size: 0.75rem; margin-top: 0.15rem; }
   .actions { display: flex; gap: 0.75rem; align-items: center; margin-top: 1rem; flex-wrap: wrap; }
   @media (max-width: 900px) { .review-layout { grid-template-columns: 1fr; } }
@@ -53,8 +61,18 @@
             <tr data-review-row="{{ row.number }}">
               <th>{{ row.number }}</th>
               {% for cell in row.cells %}
-                <td class="{% if cell.is_low_confidence %}low-confidence{% endif %}">
-                  <input name="cell_{{ cell.pk }}" value="{{ cell.review_value }}" aria-label="Row {{ row.number }} group {{ cell.group_number }} {{ cell.field_type }}">
+                <td
+                  class="{% if cell.is_low_confidence %}low-confidence{% endif %}{% if cell.is_flagged %} cell-suspicious{% endif %}"
+                  data-cell-id="{{ cell.pk }}"
+                  data-correct-url="{% url 'ocr:correct_cell' sheet.pk cell.pk %}"
+                  data-is-flagged="{% if cell.is_flagged %}true{% else %}false{% endif %}"
+                >
+                  <input
+                    name="cell_{{ cell.pk }}"
+                    value="{{ cell.review_value }}"
+                    aria-label="Row {{ row.number }} group {{ cell.group_number }} {{ cell.field_type }}"
+                    data-cell-id="{{ cell.pk }}"
+                  >
                   {% if cell.is_low_confidence %}
                     <span class="confidence">{{ cell.confidence|floatformat:2 }}</span>
                   {% endif %}
@@ -79,4 +97,102 @@
     </form>
   </div>
 </div>
+
+<script>
+  window.extractedData = { cells: {} };
+
+  function getCookie(name) {
+    const cookies = document.cookie ? document.cookie.split(";") : [];
+    for (const cookie of cookies) {
+      const [key, ...value] = cookie.trim().split("=");
+      if (key === name) {
+        return decodeURIComponent(value.join("="));
+      }
+    }
+    return "";
+  }
+
+  function syncCellState(cellData) {
+    const cell = document.querySelector(`[data-cell-id="${cellData.id}"]`);
+    if (!cell) {
+      return;
+    }
+    const input = cell.querySelector("input");
+    if (input) {
+      input.value = cellData.value;
+    }
+    cell.classList.toggle("cell-suspicious", Boolean(cellData.is_flagged));
+    cell.dataset.isFlagged = cellData.is_flagged ? "true" : "false";
+    window.extractedData.cells[cellData.id] = {
+      value: cellData.value,
+      is_flagged: Boolean(cellData.is_flagged),
+      row_number: cellData.row_number,
+      group_number: cellData.group_number,
+      field_type: cellData.field_type,
+    };
+  }
+
+  async function handleCellCorrection(cellId, newValue) {
+    const cell = document.querySelector(`[data-cell-id="${cellId}"]`);
+    if (!cell) {
+      return;
+    }
+
+    const normalizedValue = String(newValue || "").trim();
+    if (!/^\d+$/.test(normalizedValue)) {
+      alert("Enter a valid number.");
+      return;
+    }
+
+    cell.classList.add("cell-saving");
+    try {
+      const response = await fetch(cell.dataset.correctUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": getCookie("csrftoken"),
+        },
+        body: JSON.stringify({ value: normalizedValue }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        alert(payload.error || "Could not save the correction.");
+        return;
+      }
+
+      for (const changedCell of payload.changed_cells || [payload.cell]) {
+        syncCellState(changedCell);
+      }
+      window.extractedData.final_data = payload.final_data;
+    } finally {
+      cell.classList.remove("cell-saving");
+    }
+  }
+
+  document.querySelectorAll("[data-cell-id]").forEach((cell) => {
+    const input = cell.querySelector("input");
+    if (!input) {
+      return;
+    }
+
+    window.extractedData.cells[cell.dataset.cellId] = {
+      value: input.value,
+      is_flagged: cell.dataset.isFlagged === "true",
+    };
+
+    cell.addEventListener("click", () => {
+      if (cell.classList.contains("cell-suspicious")) {
+        input.focus();
+        input.select();
+      }
+    });
+
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && cell.classList.contains("cell-suspicious")) {
+        event.preventDefault();
+        handleCellCorrection(cell.dataset.cellId, input.value);
+      }
+    });
+  });
+</script>
 {% endblock %}
